@@ -1,143 +1,199 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
+using System.Reflection;
 
 public class LinkageAnimation : MonoBehaviour
 {
+    #region field
     public bool Playing = true;
     public float Speed = 1.0f;
-    public List<AnimationFrame> Targets;
+    public bool Loop = true;
+    public int FrameLength = 0;
+    public List<LinkageAnimationTarget> Targets;
+    public List<LinkageAnimationCallBack> CallBacks;
 
-    [SerializeField]
-    private int _frameLength = 0;
-    private int _frameIndex = 0;
-    private float _frameLocation = 0.0f;
+    private int _playIndex = 0;
+    private float _playLocation = 0.0f;
+    #endregion
 
-#if UNITY_EDITOR
-    /// <summary>
-    /// 添加联动物体
-    /// </summary>
-    public void AddAnimationFrame()
+    private void Awake()
     {
-        if (Targets == null)
-            Targets = new List<AnimationFrame>();
-
-        AnimationFrame af = new AnimationFrame(transform);
-        for (int i = 0; i < _frameLength; i++)
-        {
-            af.Frames.Add(new Frame());
-        }
-        Targets.Add(af);
+        InitComponent();
     }
-
-    /// <summary>
-    /// 移除联动物体
-    /// </summary>
-    public void RemoveAnimationFrame(AnimationFrame frame)
-    {
-        if (Targets == null)
-            return;
-
-        if (Targets.Contains(frame))
-        {
-            Targets.Remove(frame);
-            if (Targets.Count <= 0)
-                _frameLength = 0;
-        }
-    }
-
-    /// <summary>
-    /// 移除联动物体
-    /// </summary>
-    public void RemoveAtAnimationFrame(int index)
-    {
-        if (Targets == null)
-            return;
-
-        if (index >= 0 && index < Targets.Count)
-        {
-            Targets.RemoveAt(index);
-            if (Targets.Count <= 0)
-                _frameLength = 0;
-        }
-    }
-
-    /// <summary>
-    /// 添加关键帧
-    /// </summary>
-    public void AddFrame()
-    {
-        if (Targets == null || Targets.Count <= 0)
-            return;
-
-        for (int i = 0; i < Targets.Count; i++)
-        {
-            Targets[i].Frames.Add(new Frame());
-        }
-        _frameLength += 1;
-    }
-
-    /// <summary>
-    /// 移除关键帧
-    /// </summary>
-    public void RemoveAtFrame(int index)
-    {
-        if (Targets == null || Targets.Count <= 0)
-            return;
-
-        for (int i = 0; i < Targets.Count; i++)
-        {
-            if (index >= 0 && index < Targets[i].Frames.Count)
-            {
-                Targets[i].Frames.RemoveAt(index);
-            }
-        }
-        _frameLength -= 1;
-    }
-
-    public int FrameLength()
-    {
-        return _frameLength;
-    }
-#endif
 
     private void Update()
     {
         UpdateAnimation();
     }
 
-    private void UpdateAnimation()
+    /// <summary>
+    /// 重新播放动画
+    /// </summary>
+    public void RePlay()
     {
-        if (Playing && Targets != null && _frameLength > 1)
+        _playIndex = 0;
+        _playLocation = 0f;
+        Playing = true;
+    }
+
+    /// <summary>
+    /// 停止播放动画
+    /// </summary>
+    public void Stop()
+    {
+        Playing = false;
+        SetFrame(1);
+    }
+
+    /// <summary>
+    /// 设置动画为指定关键帧
+    /// </summary>
+    public void SetFrame(int index)
+    {
+        if (index > 0 && index <= FrameLength)
         {
-            if (_frameLocation >= 1.0f)
-            {
-                _frameLocation = 0.0f;
-                _frameIndex += 1;
-                if (_frameIndex >= (_frameLength - 1))
-                {
-                    _frameIndex = 0;
-                }
-            }
-            else
-            {
-                _frameLocation += Time.deltaTime * Speed;
-            }
+            _playIndex = index - 1;
+            _playLocation = 0f;
 
             for (int i = 0; i < Targets.Count; i++)
             {
-                if (Targets[i].Target != null && Targets[i].Frames.Count > 0)
-                    UpdateFrame(Targets[i]);
+                UpdateFrame(Targets[i], _playIndex);
             }
         }
     }
 
-    private void UpdateFrame(AnimationFrame af)
+    #region auxiliary method
+    /// <summary>
+    /// 初始化运行时控件
+    /// </summary>
+    private void InitComponent()
     {
-        if (!af.Frames[_frameIndex].PositionDisabled && !af.Frames[_frameIndex + 1].PositionDisabled)
-            af.Target.localPosition = Vector3.Lerp(af.Frames[_frameIndex].Position, af.Frames[_frameIndex + 1].Position, _frameLocation);
-        if (!af.Frames[_frameIndex].RotationDisabled && !af.Frames[_frameIndex + 1].RotationDisabled)
-            af.Target.localRotation = Quaternion.Euler(Vector3.Lerp(af.Frames[_frameIndex].Rotation, af.Frames[_frameIndex + 1].Rotation, _frameLocation));
-        if (!af.Frames[_frameIndex].ScaleDisabled && !af.Frames[_frameIndex + 1].ScaleDisabled)
-            af.Target.localScale = Vector3.Lerp(af.Frames[_frameIndex].Scale, af.Frames[_frameIndex + 1].Scale, _frameLocation);
+        for (int i = 0; i < Targets.Count; i++)
+        {
+            LinkageAnimationTarget lat = Targets[i];
+
+            if (lat.Target)
+            {
+                if (lat.PropertysRunTime == null)
+                {
+                    lat.PropertysRunTime = new List<LAPropertyRunTime>();
+                }
+
+                for (int j = 0; j < lat.Propertys.Count; j++)
+                {
+                    LAProperty lap = lat.Propertys[j];
+                    Component cp = lat.Target.GetComponent(lap.ComponentName);
+                    PropertyInfo pi = cp ? cp.GetType().GetProperty(lap.PropertyName) : null;
+                    bool valid = (cp != null && pi != null);
+                    LAPropertyRunTime laprt = new LAPropertyRunTime(valid, cp, pi);
+                    lat.PropertysRunTime.Add(laprt);
+                }
+            }
+        }
     }
+
+    /// <summary>
+    /// 发起回调
+    /// </summary>
+    private void LaunchCallBack(int frameIndex)
+    {
+        int index = frameIndex + 1;
+        LinkageAnimationCallBack lacb = CallBacks.Find((l) => l.Index == index);
+        if (lacb != null && lacb.Target)
+        {
+            lacb.Target.SendMessage(lacb.Method);
+        }
+    }
+    
+    /// <summary>
+    /// 更新动画
+    /// </summary>
+    private void UpdateAnimation()
+    {
+        if (Playing && FrameLength > 1)
+        {
+            if (_playLocation > 1f)
+            {
+                _playLocation = 0f;
+                _playIndex += 1;
+                if (_playIndex >= FrameLength)
+                {
+                    _playIndex = 0;
+                }
+
+                LaunchCallBack(_playIndex);
+            }
+            else
+            {
+                _playLocation += Time.deltaTime * Speed;
+            }
+
+            int current = _playIndex;
+            int next = _playIndex + 1;
+            if (next >= FrameLength)
+            {
+                next = 0;
+                if (!Loop)
+                {
+                    Playing = false;
+                    _playIndex = 0;
+                    _playLocation = 0f;
+                    return;
+                }
+            }
+
+            for (int i = 0; i < Targets.Count; i++)
+            {
+                UpdateFrame(Targets[i], current, next);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 更新动画帧（两个值之间插值）
+    /// </summary>
+    private void UpdateFrame(LinkageAnimationTarget lat, int currentIndex, int nextIndex)
+    {
+        if (lat.Target)
+        {
+            LAFrame currentLAF = lat.Frames[currentIndex];
+            LAFrame nextLAF = lat.Frames[nextIndex];
+
+            for (int i = 0; i < lat.PropertysRunTime.Count; i++)
+            {
+                LAProperty lap = lat.Propertys[i];
+                LAPropertyRunTime laprt = lat.PropertysRunTime[i];
+
+                if (laprt.IsValid)
+                {
+                    object value = LinkageAnimationTool.Lerp(currentLAF.GetFrameValue(i), nextLAF.GetFrameValue(i), lap.PropertyType, _playLocation);
+                    laprt.PropertyValue.SetValue(laprt.PropertyComponent, value, null);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 更新动画帧（一个固定值）
+    /// </summary>
+    private void UpdateFrame(LinkageAnimationTarget lat, int currentIndex)
+    {
+        if (lat.Target)
+        {
+            LAFrame currentLAF = lat.Frames[currentIndex];
+
+            for (int i = 0; i < lat.PropertysRunTime.Count; i++)
+            {
+                LAProperty lap = lat.Propertys[i];
+                LAPropertyRunTime laprt = lat.PropertysRunTime[i];
+
+                if (laprt.IsValid)
+                {
+                    object value = currentLAF.GetFrameValue(i);
+                    laprt.PropertyValue.SetValue(laprt.PropertyComponent, value, null);
+                }
+            }
+        }
+    }
+    #endregion
 }
